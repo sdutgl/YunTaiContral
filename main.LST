@@ -1,0 +1,549 @@
+C51 COMPILER V9.00   MAIN                                                                  02/29/2016 09:18:16 PAGE 1   
+
+
+C51 COMPILER V9.00, COMPILATION OF MODULE MAIN
+OBJECT MODULE PLACED IN main.OBJ
+COMPILER INVOKED BY: C:\Keil\C51\BIN\C51.EXE main.c BROWSE DEBUG OBJECTEXTEND
+
+line level    source
+
+   1          #include <STC12C5A60S2.H>
+   2          #include <INTRINS.H>
+   3          #include <MYDELAY.H>
+   4          #define FOSC 12000000           //时钟频率
+   5          #define S2RI 0x01
+   6          #define S2TI 0x02
+   7          #define S2RB8 0x04
+   8          #define S2TB8 0x08
+   9          #define COM_TX1_Lenth 4         //接收缓冲大小
+  10          typedef unsigned char BYTE;
+  11          typedef unsigned int WORD;
+  12          sfr IP2H=0xb6;
+  13          sbit aux = P0^0;       //P0  0是as62的aux
+  14          BYTE signal_level();
+  15          void baudchange(long baud);
+  16          void Inituart(void);
+  17          void init_as62_t30();
+  18          void UartInit(void);    //波特率初始化
+  19          void delay(BYTE m);
+  20          void serial1senddata(BYTE dat);//串口1发字节
+  21          void serial2senddata(BYTE dat);//串口二发字节
+  22          void serial2sendstdring(char *s);//串口二发串
+  23          void send_rssitest_to_as62t30(BYTE dat);   //发送地址信道信号强度数据到as62
+  24          void control_yuntai_pelco_d(BYTE address,BYTE direction,BYTE horizontalSpeed,BYTE verticalSpeed,BYTE delay
+             -);
+  25          void auto_alignment();
+  26          BYTE check_stop_alignment();
+  27          void auto_alignment_eazysearch();
+  28          void Uart1_Init(WORD baud);
+  29          void Uart2_Init(WORD baud);
+  30          BYTE auto_init_position();
+  31          void optimized_auto_alignment();
+  32          BYTE move_to_dir_and_delay(BYTE dir,WORD delay);
+  33          void screw_auto_alignment();
+  34          BYTE respond_control();
+  35          //unsigned char send[4];//发送到as62的地址信道信号强度数据
+  36          unsigned char active[6]= {0x08,0x02,0x10,0x04,0x00,0x11}; //命令查询表上、右、下、左、停、自动
+  37          unsigned char rxbuf[COM_TX1_Lenth];      //串口1接收缓冲
+  38          BYTE automod=0;  //自动模式标志
+  39          //BYTE as62_t30_addr=P1&0x0f;       //拨码开关改变as62_t30地址
+  40          //BYTE as62_t30_channel=(P0&0x3e)>>1;
+  41          int rxpoint=0;  //接收上限指针
+  42          int rxbusy=0;   //接收忙标志
+  43          BYTE glc=0;
+  44          BYTE a[7];
+  45          BYTE time0flag=0;
+  46          BYTE sum=0;        //反馈信号延时发送计数
+  47          BYTE signal=0;
+  48          void main()
+  49          {
+  50   1          aux=1;
+  51   1          Inituart();          //串口初始化
+  52   1          init_as62_t30();     //433初始
+  53   1          ES=0;
+  54   1          //auto_init_position();
+C51 COMPILER V9.00   MAIN                                                                  02/29/2016 09:18:16 PAGE 2   
+
+  55   1          ES=1;
+  56   1              //P2=0;
+  57   1          while(1)
+  58   1          {
+  59   2              P2|=1;         //使能485
+  60   2              delaynms(3000);
+  61   2              serial1senddata(signal_level());
+  62   2      
+  63   2              if(sum++>5)
+  64   2              {
+  65   3                  sum=0;
+  66   3              }
+  67   2      
+  68   2              if(automod==1)
+  69   2              {
+  70   3                  //auto_alignment();
+  71   3                  screw_auto_alignment();
+  72   3                  //auto_alignment_eazysearch();
+  73   3              }
+  74   2                      respond_control();
+  75   2      
+  76   2      
+  77   2          }
+  78   1      }
+  79          
+  80          /***********初始化部分*************/
+  81          void Uart1_Init(WORD baud)              //1200bps@12.000MHz  定时器1作为波特率发生器，12T
+  82          {
+  83   1          PCON &= 0x7F;               //波特率不倍速
+  84   1          SCON = 0x50;                //8位数据,可变波特率
+  85   1          AUXR &= 0xBF;               //定时器1时钟为Fosc/12,即12T
+  86   1          AUXR &= 0xFE;               //串口1选择定时器1为波特率发生器
+  87   1          TMOD &= 0x0F;               //清除定时器1模式位
+  88   1          TMOD |= 0x20;               //设定定时器1为8位自动重装方式
+  89   1          TL1=256-FOSC/baud/32/12; //设定定时初值
+  90   1          TH1 = 256-FOSC/baud/32/12;          //设定定时器重装值
+  91   1          ET1 = 0;            //禁止定时器1中断
+  92   1          TR1 = 1;            //启动定时器1
+  93   1      }
+  94          void Uart2_Init(WORD baud)              // 串口2初始化初始化 使用独立波特率发生器作为波特率发生器
+  95          {
+  96   1          AUXR &= 0xF7;               //波特率不倍速
+  97   1          S2CON = 0x50;               //8位数据,可变波特率
+  98   1          AUXR &= 0xFB;               //独立波特率发生器时钟为Fosc/12,即12T
+  99   1          BRT = 256-FOSC/baud/32/12;                  //设定独立波特率发生器重装值
+ 100   1          AUXR |= 0x10;               //启动独立波特率发生器
+ 101   1      }
+ 102          void Inituart(void)    //初始化操作
+ 103          {
+ 104   1          Uart1_Init(1200);    //串口1初始化
+ 105   1          Uart2_Init(1200);    //串口2初始化
+ 106   1          AUXR1 |=0x10;        //端口映射到P4
+ 107   1          IPH |= 0x18;//串口一优先级1
+ 108   1          IP |= 0x18;
+ 109   1          IPH2 |= 0x01;//串口二优先级1
+ 110   1          IP2 |= 0x01;
+ 111   1          EA=1;
+ 112   1          ES=1;
+ 113   1      }
+ 114          
+ 115          void init_as62_t30()  //初始化as62-t30
+ 116          {
+C51 COMPILER V9.00   MAIN                                                                  02/29/2016 09:18:16 PAGE 3   
+
+ 117   1          //P0 &= 0x3f;
+ 118   1          P0 &=0x3f;
+ 119   1      }
+ 120          
+ 121          /************串口处理部分*******************/
+ 122          
+ 123          void UART1_Rountine(void) interrupt 4 using 1
+ 124          {
+ 125   1          BYTE tmp=0x00;
+ 126   1          BYTE i=0;
+ 127   1      
+ 128   1          if(RI)
+ 129   1          {
+ 130   2              RI=0;
+ 131   2              tmp=SBUF;
+ 132   2      
+ 133   2              if(rxbusy==0)
+ 134   2              {
+ 135   3                  rxpoint=0;
+ 136   3      
+ 137   3                  for(i=0; i<4; i++) { rxbuf[i]=0; }
+ 138   3      
+ 139   3                  if(tmp==0xa0)       { rxbusy=1; }
+ 140   3                  else { return ; }
+ 141   3              }
+ 142   2      
+ 143   2              rxbuf[rxpoint++]=tmp;
+ 144   2      
+ 145   2              if(rxpoint>=COM_TX1_Lenth)
+ 146   2              {
+ 147   3                  rxbusy=0;
+ 148   3                  rxpoint=0;
+ 149   3              }
+ 150   2          }
+ 151   1      }
+ 152          
+ 153          
+ 154          void serial1senddata(BYTE dat)     //串口1发送单字节
+ 155          {
+ 156   1          SBUF=dat;
+ 157   1      
+ 158   1          while(!TI);
+ 159   1      
+ 160   1          TI=0;
+ 161   1      }
+ 162          //void serial1sendstring(char *s)               //串口1发送字符串
+ 163          //{
+ 164          //    while(*s)
+ 165          //    {
+ 166          //        serial1senddata(*s++);
+ 167          //    }
+ 168          //}
+ 169          
+ 170          void serial2senddata(BYTE dat)           //串口2发送单字节
+ 171          {
+ 172   1          S2BUF=dat;
+ 173   1      
+ 174   1          while(!S2CON&S2TI);
+ 175   1      
+ 176   1          S2CON&=~S2TI;
+ 177   1      }
+ 178          //void serial2sendstring(char *s)                //串口2发送字符串
+C51 COMPILER V9.00   MAIN                                                                  02/29/2016 09:18:16 PAGE 4   
+
+ 179          //{
+ 180          //    while(*s)
+ 181          //    {
+ 182          //        serial2senddata(*s++);
+ 183          //    }
+ 184          //}
+ 185          
+ 186          /************反馈信号强度部分***************/
+ 187          void send_rssitest_to_as62t30(BYTE dat)   //发送地址信道信号强度数据到as62
+ 188          {
+ 189   1          BYTE i;
+ 190   1          BYTE send[4];
+ 191   1      
+ 192   1          while(!aux);//busy
+ 193   1      
+ 194   1          send[0]=0xa0;
+ 195   1          send[1]=dat;
+ 196   1          send[2]=0xaf;
+ 197   1          send[3]=send[0]^send[1]^send[2];
+ 198   1      
+ 199   1          for(i=0; i<4; i++)
+ 200   1          {
+ 201   2              serial1senddata(send[i]);
+ 202   2              delaynms(10);
+ 203   2          }
+ 204   1      }
+ 205          
+ 206          /************************云台控制部分*****************************/
+ 207          void control_yuntai_pelco_d(BYTE address,BYTE direction,BYTE horizontalSpeed,BYTE verticalSpeed,BYTE delay
+             -)
+ 208          {
+ 209   1          BYTE f=0;
+ 210   1          BYTE i=0;
+ 211   1          f=delay;
+ 212   1          f=0;
+ 213   1      
+ 214   1          for(i=0; i<8; i++) { a[i]=0; }
+ 215   1      
+ 216   1          a[0]=0xFF;                          //起始码
+ 217   1          a[1]=address;                          //地址码
+ 218   1          a[2]=0x00;                     //数据位1   无动作（无涉摄像头安置）
+ 219   1          a[3]=direction;                        //数据位2   控制云台转动方向
+ 220   1          a[4]=horizontalSpeed;                          //数据位3   控制云台水平转动速度
+ 221   1          a[5]=verticalSpeed;                    //数据位4   控制云台竖直转动速度
+ 222   1          // a[6]=0x0A;                          //停止码
+ 223   1      
+ 224   1          for(f=1; f<6; f++)   //生成校验码
+ 225   1          {
+ 226   2              a[6]+=a[f];
+ 227   2          }
+ 228   1      
+ 229   1          for(i=0; i<7; i++)   //通过串口2发送数据
+ 230   1          {
+ 231   2              serial2senddata(a[i]);
+ 232   2              delaynms(30);
+ 233   2          }
+ 234   1      
+ 235   1          //delaynms(delay);           //云台在此控制方式下转动时间
+ 236   1      }
+ 237          
+ 238          //------------------------------------------天线自动对准部分---------------------------------------------
+ 239          
+C51 COMPILER V9.00   MAIN                                                                  02/29/2016 09:18:16 PAGE 5   
+
+ 240          /*****************************************************
+ 241          函数功能：检查433是否收到合法的停止自动对准模式信号
+ 242          *****************************************************/
+ 243          BYTE check_stop_alignment()
+ 244          {
+ 245   1          int k=0;
+ 246   1      
+ 247   1          if(rxbusy==0)                  //接收缓冲如果未被占用，检查数据是否合法，并根据结果进行相关操作
+ 248   1          {
+ 249   2              if(rxbuf[0]==0xa0&&(rxbuf[3]==(rxbuf[0]^rxbuf[1]^rxbuf[2])))                //数据合法性检验
+ 250   2              {
+ 251   3                  //serial2senddata(0xbb);
+ 252   3                  switch(rxbuf[1])
+ 253   3                  {
+ 254   4                      case 5:
+ 255   4                          automod=1;
+ 256   4                          break;
+ 257   4      
+ 258   4                      default:
+ 259   4                          automod=0;
+ 260   4                          break;
+ 261   4                  }
+ 262   3      
+ 263   3                  for(k=0; k<4; k++)   //清除接收缓存
+ 264   3                  {
+ 265   4                      rxbuf[k]=0;
+ 266   4                  }
+ 267   3      
+ 268   3                  if(automod!=1)
+ 269   3                  {
+ 270   4                      return 1;
+ 271   4                  }
+ 272   3              }
+ 273   2          }
+ 274   1      
+ 275   1          return 0;
+ 276   1      }
+ 277          
+ 278          /**********************************
+ 279          函数功能：云台自动对准简单对角线搜索算法
+ 280          **********************************/
+ 281          void auto_alignment_eazysearch()
+ 282          {
+ 283   1          int i=0,j=0,f=0,k=0;
+ 284   1          //        停止0 上1  下2  左3  右4
+ 285   1          BYTE d[5]= {0x00,0x08,0x10,0x04,0x02};
+ 286   1          //-------------------控制云台转动到最左下角-----------------------
+ 287   1      
+ 288   1          if(move_to_dir_and_delay(d[3]|d[2],30000)==1) { return ; }
+ 289   1      
+ 290   1          //--------------------简单斜线搜索---------------------------
+ 291   1          for(i=0; i<6; i++)
+ 292   1          {
+ 293   2              if(move_to_dir_and_delay(d[4],2400)==1) { return ; }
+ 294   2      
+ 295   2              if(move_to_dir_and_delay(d[1],4500)==1) { return ; }
+ 296   2          }
+ 297   1      }
+ 298          /**********************************
+ 299          函数功能：云台自动对准空间遍历算法
+ 300          **********************************/
+ 301          void auto_alignment()
+C51 COMPILER V9.00   MAIN                                                                  02/29/2016 09:18:16 PAGE 6   
+
+ 302          {
+ 303   1          int i=0,j=0,f=0,k=0;
+ 304   1          //        停止0 上1  下2  左3  右4
+ 305   1          BYTE d[5]= {0x00,0x08,0x10,0x04,0x02};
+ 306   1      
+ 307   1          if(move_to_dir_and_delay(d[3]|d[2],30000)==1) { return ; }
+ 308   1      
+ 309   1          for(i=0; i<6; i++)
+ 310   1          {
+ 311   2              for(j=0; j<7; j++)
+ 312   2              {
+ 313   3                  if(f==0)
+ 314   3                  {
+ 315   4                      if(move_to_dir_and_delay(d[4],2400)==1) { return ; }
+ 316   4                  }
+ 317   3                  else
+ 318   3                  {
+ 319   4                      if(move_to_dir_and_delay(d[3],2400)==1) { return ; }
+ 320   4                  }
+ 321   3              }
+ 322   2      
+ 323   2              f=(f==0)?1:0;
+ 324   2      
+ 325   2              if(move_to_dir_and_delay(d[1],4500)==1) { return ; }
+ 326   2          }
+ 327   1      
+ 328   1          for(j=0; j<7; j++)
+ 329   1          {
+ 330   2              if(f==0)
+ 331   2              {
+ 332   3                  if(move_to_dir_and_delay(d[4],2400)==1) { return ; }
+ 333   3              }
+ 334   2              else
+ 335   2              {
+ 336   3                  if(move_to_dir_and_delay(d[3],2400)==1) { return ; }
+ 337   3              }
+ 338   2          }
+ 339   1      }
+ 340          
+ 341          /***********************************************
+ 342          函数功能：优化后的自动对准算法
+ 343          ***********************************************/
+ 344          void optimized_auto_alignment()
+ 345          {
+ 346   1          int i=0,j=0,f=0,k=0;
+ 347   1              BYTE tmp=1;
+ 348   1          //        停止0 上1  下2  左3  右4
+ 349   1          BYTE d[5]= {0x00,0x08,0x10,0x04,0x02};
+ 350   1          //--------------------简单斜线搜索---------------------------
+ 351   1              while(1)
+ 352   1              {
+ 353   2                      if(signal_level()>tmp)
+ 354   2                      {
+ 355   3                              tmp=signal_level();
+ 356   3                              if(move_to_dir_and_delay(d[4],2400)==1) { return ; }
+ 357   3                      }
+ 358   2                      else
+ 359   2                      {
+ 360   3                              if(move_to_dir_and_delay(d[3],2400)==1) { return ; }
+ 361   3                      }
+ 362   2              }
+ 363   1              tmp=1;
+C51 COMPILER V9.00   MAIN                                                                  02/29/2016 09:18:16 PAGE 7   
+
+ 364   1              while(1)
+ 365   1              {
+ 366   2                      if(signal_level()>tmp)
+ 367   2                      {
+ 368   3                              tmp=signal_level();
+ 369   3                              if(move_to_dir_and_delay(d[1],2400)==1) { return ; }
+ 370   3                      }
+ 371   2                      else
+ 372   2                      {
+ 373   3                              if(move_to_dir_and_delay(d[2],2400)==1) { return ; }
+ 374   3                      }
+ 375   2              }
+ 376   1      }
+ 377          /***********************************************
+ 378          函数功能：螺旋遍历算法
+ 379          ***********************************************/
+ 380          void screw_auto_alignment()
+ 381          {
+ 382   1          int i=0,j=0,f=0,k=0;
+ 383   1          //        停止0 上1  下2  左3  右4
+ 384   1          BYTE d[5]= {0x00,0x08,0x10,0x04,0x02};
+ 385   1          BYTE e[4]= {0x02,0x08,0x04,0x10};
+ 386   1      
+ 387   1          if(auto_init_position()==1) { return; }
+ 388   1      
+ 389   1          for(i=0; i<10; i++)
+ 390   1          {
+ 391   2              for(j=0; j<=i/2; j++)
+ 392   2              {
+ 393   3                  if(f>3) { f=0; }
+ 394   3      
+ 395   3                  if(move_to_dir_and_delay(e[f],2000)==1) { return; }
+ 396   3              }
+ 397   2      
+ 398   2              f++;
+ 399   2          }
+ 400   1      }
+ 401          /***********************************************
+ 402          函数功能：初始化云台位置，使云台处于水平和竖直的中点位置
+ 403          ***********************************************/
+ 404          BYTE auto_init_position()
+ 405          {
+ 406   1          int i=0,j=0,f=0,k=0;
+ 407   1          //        停止0 上1  下2  左3  右4
+ 408   1          BYTE d[5]= {0x00,0x08,0x10,0x04,0x02};
+ 409   1      
+ 410   1          if(move_to_dir_and_delay(d[3]|d[2],30000)==1) { return 1; }
+ 411   1      
+ 412   1          if(move_to_dir_and_delay(d[4]|d[1],7500)==1) { return 1; }
+ 413   1      
+ 414   1          if(move_to_dir_and_delay(d[1],7500)==1) { return 1; }
+ 415   1      
+ 416   1          return 0;
+ 417   1      }
+ 418          /***********************************************
+ 419          函数功能：向dir方向转动delay秒
+ 420          ***********************************************/
+ 421          BYTE move_to_dir_and_delay(BYTE dir,WORD delay)
+ 422          {
+ 423   1          int k=0;
+ 424   1          control_yuntai_pelco_d(0x01,dir,0x01,0x01,1);
+ 425   1      
+C51 COMPILER V9.00   MAIN                                                                  02/29/2016 09:18:16 PAGE 8   
+
+ 426   1          for(k=0; k<delay; k++)         //延时30秒 如果有停止自动模式的控制命令发送过来就向云台发送停止指令并跳
+             -出自动控制函数
+ 427   1          {
+ 428   2              delay1ms();
+ 429   2      
+ 430   2              if(check_stop_alignment()==1||signal_level()>0)
+ 431   2              {
+ 432   3                  control_yuntai_pelco_d(0x01,0x00,0x00,0x00,1);
+ 433   3                  return 1;
+ 434   3              }
+ 435   2          }
+ 436   1      
+ 437   1          control_yuntai_pelco_d(0x01,0x00,0x00,0x00,1);
+ 438   1          return 0;
+ 439   1      }
+ 440          
+ 441          //------------------------------辅助函数-------------------------------------
+ 442          BYTE respond_control()
+ 443          {
+ 444   1              WORD k=0;
+ 445   1          if(rxbusy==0)                  //接收缓冲如果未被占用，检查数据是否合法，并根据结果进行相关操作
+ 446   1          {
+ 447   2              if(rxbuf[0]==0xa0&&(rxbuf[3]==(rxbuf[0]^rxbuf[1]^rxbuf[2])))                //数据合法性检验
+ 448   2              {
+ 449   3                  //serial2senddata(0xbb);
+ 450   3                  switch(rxbuf[1])
+ 451   3                  {
+ 452   4                      case 0:
+ 453   4                          control_yuntai_pelco_d(0x01,0x00,0x00,0x00,1);              //停止
+ 454   4                          break;
+ 455   4      
+ 456   4                      case 1:
+ 457   4                          control_yuntai_pelco_d(0x01,0x08,0x00,0x01,1);                      //上
+ 458   4                          break;
+ 459   4      
+ 460   4                      case 2:
+ 461   4                          control_yuntai_pelco_d(0x01,0x10,0x00,0x01,1);                      //下
+ 462   4                          break;
+ 463   4      
+ 464   4                      case 3:
+ 465   4                          control_yuntai_pelco_d(0x01,0x04,0x01,0x00,1);                      //左
+ 466   4                          break;
+ 467   4      
+ 468   4                      case 4:
+ 469   4                          control_yuntai_pelco_d(0x01,0x02,0x01,0x00,1);                      //右
+ 470   4                          break;
+ 471   4      
+ 472   4                      case 5:
+ 473   4                          automod=1;
+ 474   4                          break;
+ 475   4      
+ 476   4                      case 6:
+ 477   4                          automod=0;
+ 478   4                          break;
+ 479   4      
+ 480   4                      case 7:
+ 481   4                          break;
+ 482   4      
+ 483   4                      case 8:
+ 484   4                          break;
+ 485   4      
+ 486   4                      default:
+C51 COMPILER V9.00   MAIN                                                                  02/29/2016 09:18:16 PAGE 9   
+
+ 487   4                          break;
+ 488   4                  }
+ 489   3      
+ 490   3                  for(k=0; k<4; k++)  { rxbuf[k]=0; }            //清除串口1接收缓存
+ 491   3              }
+ 492   2          }
+ 493   1              
+ 494   1      }
+*** WARNING C173 IN LINE 494 OF MAIN.C: missing return-expression
+ 495          BYTE signal_level()                                                       //返回当前有几格信号
+ 496          {
+ 497   1              BYTE i=5;
+ 498   1              BYTE  signal=0;
+ 499   1              for(i=0;i<5;i++)
+ 500   1              {
+ 501   2                      signal=0x01<<(5-i);
+ 502   2                      if(signal<=(~P2&0x3f)) break;
+ 503   2              }
+ 504   1              return 5-i;
+ 505   1      }
+*** WARNING C290 IN LINE 494 OF MAIN.C: missing return value
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =   1484    ----
+   CONSTANT SIZE    =     29    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =     26      89
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =   ----    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  2 WARNING(S),  0 ERROR(S)

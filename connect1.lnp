@@ -1,0 +1,5 @@
+"STARTUP.obj",
+"main.obj",
+"mydelay.obj" 
+TO "connect1" 
+RAMSIZE(256) 
